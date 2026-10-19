@@ -150,8 +150,10 @@ def _gaussian_filter1d_xp(
     result_fft = data_fft * kernel_fft
     result = xp.fft.irfft(result_fft, n=fft_size, axis=-1)
 
-    # Extract valid region (accounting for kernel center)
-    start = kernel_radius
+    # Extract valid region (accounting for kernel center). Sample i of the
+    # input sits at index i + kernel_radius of the padded data, and the full
+    # convolution centres the kernel on it at index i + 2 * kernel_radius.
+    start = 2 * kernel_radius
     result = result[:, start : start + n]
 
     # Reshape back
@@ -190,7 +192,6 @@ def _uniform_filter1d_xp(
 
     # Move target axis to the end
     data = xp.moveaxis(data, axis, -1)
-    n = data.shape[-1]
 
     # Pad for edge handling
     pad_left = size // 2
@@ -198,21 +199,14 @@ def _uniform_filter1d_xp(
     pad_width = [(0, 0)] * (data.ndim - 1) + [(pad_left, pad_right)]
     data_padded = xp.pad(data, pad_width, mode="edge")
 
-    # Use cumulative sum for efficient moving average
+    # Use cumulative sum for efficient moving average. A leading zero makes
+    # cumsum[i] the sum of the first i padded samples.
     cumsum = xp.cumsum(data_padded, axis=-1)
+    zeros = xp.zeros((*cumsum.shape[:-1], 1), dtype=cumsum.dtype)
+    cumsum = xp.concatenate([zeros, cumsum], axis=-1)
 
-    # Moving average = (cumsum[i+size] - cumsum[i]) / size
+    # Moving average = (cumsum[i+size] - cumsum[i]) / size, n values
     result = (cumsum[..., size:] - cumsum[..., :-size]) / size
-
-    # Handle edge case where result might be slightly off size
-    if result.shape[-1] > n:
-        result = result[..., :n]
-    elif result.shape[-1] < n:
-        # This shouldn't happen with correct padding, but handle anyway
-        pad_needed = n - result.shape[-1]
-        result = xp.pad(
-            result, [(0, 0)] * (result.ndim - 1) + [(0, pad_needed)], mode="edge"
-        )
 
     # Move axis back
     result = xp.moveaxis(result, -1, axis)
